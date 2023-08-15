@@ -1,0 +1,201 @@
+# Exploration of Redundancy Analysis
+
+```{r}
+#Libs
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggrepel)
+library(lubridate)
+
+
+#file Paths
+filePath <- "C:/Users/24chi/Desktop/OffshoreWind/AppScripts/3itemList.xlsx"
+filePath_Meta <- "C:/Users/24chi/Desktop/OffshoreWind/DA_Classifications_Final.xlsx"
+data_ful<-data # Copy for line counts later
+
+#data import
+nameData <- read_excel(filePath, sheet = 1)
+metaData <- read_excel(filePath_Meta, sheet = 2)
+
+nameData$Name[is.na(nameData$Name)] <- 'Prj Specific'
+
+nameData$prj <- substr(nameData$Code,1,3)
+data_ful<-nameData # Copy for line counts later
+
+effectiveLines <- unique(nameData$Name)
+
+result <- nameData %>%
+  group_by(Name, prj) %>%
+  summarize(count = n()) 
+
+# Create a data frame with all combinations of unique Name and prj values
+all_combinations <- expand.grid(
+  Name = unique(nameData$Name),
+  prj = unique(nameData$prj)
+)
+
+# Left join the result with all_combinations to include all combinations
+result <- all_combinations %>%
+  left_join(result, by = c("Name", "prj")) %>%
+  mutate(count = coalesce(count, 0))
+
+result <- result[(!is.na(result$Name)),]
+result <- result[(!is.na(result$prj)),]
+
+result$prj <- factor(result$prj, levels = c("BIW", "YVW", "SFR", "OWO", "REV", "KHW", 'CVW', "SUN", "NEW", "MFW", "ASS", "EPW"))
+
+result<-result[result$Name == 'Prj Specific', ]
+
+AllCounts <- data_ful %>% group_by(prj) %>%
+  summarise(count = n())
+
+result$TotCount<- AllCounts$count[match(result$prj, AllCounts$prj)]
+result$dev <- metaData$Developer[match(result$prj, metaData$prjCode)]
+result$date <- as_date(metaData$prjDate[match(result$prj, metaData$prjCode)], format = "%m/%d/%Y")
+
+
+#Plot of Project Specific Line Items
+ggplot(result, aes(TotCount, count, label = prj, color = dev))+geom_point()+geom_text_repel(show.legend = F)+theme_classic2()+
+  labs(x='Total Prj Line items', y='# Prj specific line items', color = NULL)
+
+#result <- result[result$prj != "BIW", ]
+
+# ggplot(result, aes(date, count, label = prj, color = dev))+geom_point()+geom_text_repel()+theme_classic2()+
+#   labs(x='Document Release Date', y='# Prj specific line items', color = NULL)
+# ggplot(result, aes(prj, Name, fill = count))+geom_tile()+
+#   scale
+  #+geom_label(size=5)
+
+
+#ggplot(result, aes(Name, cou))
+```
+
+```{r}
+file_path <- 'C:/Users/24chi/Desktop/OffshoreWind/AppScripts/3itemList.xlsx'
+filePath_Meta <- "C:/Users/24chi/Desktop/OffshoreWind/DA_Classifications_Final.xlsx"
+
+data <- read_excel(path = file_path, sheet = 1)
+metaData <- read_excel(filePath_Meta, sheet = 2)
+data$prj <- substr(data$Code,1,3)
+
+data_ful<-data # Copy for line counts later
+
+#Removing Project Specific Line items - 
+data$Name[is.na(data$Name)] <- 'Prj Specific'
+data <- data[!(data$Name == 'Prj Specific') , ]
+
+#Getting The count of each redundancy point by project
+result <- data %>%
+  group_by(Name, prj) %>%
+  summarize(count = n()) 
+
+# Create a data frame with all combinations of unique Name and prj values - to fill in 0 values
+all_combinations <- expand.grid(
+  Name = unique(data$Name),
+  prj = unique(data$prj)
+)
+result <- all_combinations %>%
+  left_join(result, by = c("Name", "prj")) %>%
+  mutate(count = coalesce(count, 0))
+
+#Getting the mean of each Redundancy Point across all projects
+totals <- result %>%
+  group_by(Name) %>%
+  summarize(mean = mean(count))
+
+#Calculating Anomolie from the mean for each project and each catigory and the precentage difference -1 to 1
+result$anom <- result$count - totals$mean[match(result$Name, totals$Name)]
+result$anomPrec <- (result$count - totals$mean[match(result$Name, totals$Name)]) / (totals$mean[match(result$Name, totals$Name)])
+result$prj <- factor(result$prj, levels = c("BIW", "YVW", "SFR", "OWO", "REV", "KHW", 'CVW', "SUN", "NEW", "MFW", "ASS", "EPW"))
+
+#Taking the average of the %anomolies 
+AvgAnom <- result %>% group_by(prj) %>%
+  summarise(mean = mean(anomPrec))
+
+#Getting Project line item counts - and adding them to AvgAnom
+AllCounts <- data_ful %>% group_by(prj) %>%
+  summarise(count = n())
+AvgAnom$count <- AllCounts$count[match(AvgAnom$prj, AllCounts$prj)]
+AvgAnom$dev <- metaData$Developer[match(AvgAnom$prj, metaData$prjCode)]
+
+#Generating information about the line of best fit
+lm_model <- lm(AvgAnom$mean ~ AvgAnom$count)
+slope <- coef(lm_model)[2]
+intercept <- coef(lm_model)[1]
+line_formula <- paste("y =", round(slope, 4), "* x +", round(intercept, 2))
+
+#Plotting this relatioship - "Average Precentage Anomaly Calculated from counts of Redundant \nline items compared to total project line items"
+fig7 <- ggplot(AvgAnom, aes(count, mean))+ 
+  geom_smooth(method = lm, se = FALSE, formula = 'y ~ x', color = 'black')+
+  geom_point(aes(color = dev))+
+  geom_text_repel(aes(label = prj, color = dev), show.legend = F, force = 3)+
+  geom_text(aes(x = -Inf, y = Inf, label = line_formula),
+            hjust = -0.1, vjust = 2, color = "black", size = 3) +
+  theme_classic()+
+  labs(title = NULL, y ="Avg % Anomaly", x = "Total Project Line items", color = NULL)
+
+
+ggplot(result, aes(prj, Name))+geom_tile(aes(fill = anomPrec))
+
+
+width <- 6
+height <- width*10/16
+ggsave("fig7.png", fig7, height = height, width =width, dpi = 300)
+
+```
+
+# Doing a better Job with the tile redundancy
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+file_path <- 'C:/Users/24chi/Desktop/OffshoreWind/AppScripts/3itemList.xlsx'
+
+data <- read_excel(path = file_path, sheet = 1)
+data$prj <- substr(data$Code,1,3)
+
+data_ful<-data # Copy for line counts later
+
+#Removing Project Specific Line items - 
+data$Name[is.na(data$Name)] <- 'Prj Specific'
+
+#Getting The count of each redundancy point by project
+result <- data %>%
+  group_by(Name, prj) %>%
+  summarize(count = n()) 
+# Create a data frame with all combinations of unique Name and prj values - to fill in 0 values
+all_combinations <- expand.grid(
+  Name = unique(data$Name),
+  prj = unique(data$prj)
+)
+result <- all_combinations %>%
+  left_join(result, by = c("Name", "prj")) %>%
+  mutate(count = coalesce(count, 0))
+
+
+
+result$count0 <- ifelse(result$count == 0, 0, NA)
+
+
+totals <- result %>%
+  group_by(Name) %>%
+  summarize(mean = mean(count))
+
+total2 <- result %>%
+  group_by(prj) %>%
+  summarize(mean = mean(count))
+
+result$anom <- (result$count - totals$mean[match(result$Name, totals$Name)]) / (totals$mean[match(result$Name, totals$Name)])
+
+order <- totals$Name[order(totals$mean)]
+
+result$Name <- factor(result$Name, levels = order)
+result$prj <-factor(result$prj, levels = c('BIW','CVW', "REV", "SFR", "YVW", "OWO", "NEW", "EPW", "KHW", "SUN", "ASS", "MFW"))
+
+ggplot(result, aes(prj, Name, fill= anom))+geom_tile()+theme_classic()+theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust = 0.5))
+```
