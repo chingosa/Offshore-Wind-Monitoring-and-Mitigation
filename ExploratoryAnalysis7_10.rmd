@@ -1,0 +1,659 @@
+# Exploratory Analysis 7/10 - First looks
+
+### Reading in original data
+
+```{r}
+library(openxlsx) 
+library(ggplot2)
+library(ggrepel)
+library(ggbreak) 
+library(patchwork)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(readxl)
+library(gtable)
+library(gridExtra)
+
+
+
+file_path <- "C:/Users/24chi/Desktop/OffshoreWind/DA_Classifications_Final.xlsx"
+
+classData <- read_excel(file_path, sheet = 1) #Grabbing the data from excel
+metaData <- read_excel(file_path, sheet = 2) #Grabbing the data from excel
+
+classData$prj <- substr(classData$Code,1,3)
+classData$comit <- as.numeric(substr(classData$Code,4,4))
+
+classData$date <- metaData$prjDate[match(classData$prj, metaData$prjCode)]
+classData$date <- as.Date(classData$date, format = "%m/%d/%Y")
+
+
+widerCats <- list(c("MarineMams", "Turts", "Birds", "Bats", "Fish"),
+  c("Benthic", "WaterQ", "AcouBelow", "EssFishHabs", "CoastalHabs", "WetLands"),
+  c("RecComFisheries","VesselNav", "PubHealth"),
+  c("CultArcheo" , "SocioEcon", "EnviroJustice","RecTourism"),
+  c("Visual","AcouAbove", "FAA-DOD", "AirQ", "Other"))
+
+widerCatsName <- c("Animals", "BenthicQuality", "Boats", "Human", "Air")
+
+for (i in c(1:5)){
+  classData[widerCatsName[i]] <- sapply(strsplit(classData$Prot, ",\\s*"), function(tags) any(tags %in% widerCats[[i]]))
+}
+classData$widerCatsall <- paste0(
+  ifelse(classData$Animals, 'Animals, ', ''),
+  ifelse(classData$BenthicQuality, 'BenthicQuality, ', ''), 
+  ifelse(classData$Boats, 'Boats, ', ''), 
+  ifelse(classData$Human, 'Human, ', ''), 
+  ifelse(classData$Air, 'Air, ', ''))
+
+
+```
+
+Row Counting and plotting function
+
+```{r}
+RowCounts <- function(ClassData, Title, bin = NULL, mode = 'Doc') {
+  lineCounts <- sort(table(ClassData$prj))
+  
+  
+  
+  count_df <- data.frame(Prj = names(lineCounts), Count = as.vector(lineCounts))
+  count_df$date <- metaData$prjDate[match(count_df$Prj, metaData$prjCode)]
+  count_df$dateSAP <- metaData$SAPprjDate[match(count_df$Prj, metaData$prjCode)]
+  count_df$Dev <- metaData$Developer[match(count_df$Prj, metaData$prjCode)]
+  count_df$Doc <- metaData$DocType[match(count_df$Prj, metaData$prjCode)]
+  count_df$Consult <- metaData$Consultantcy[match(count_df$Prj, metaData$prjCode)]
+  prjNames <- unique(classData$prj)
+  for (i in prjNames){
+    if (!(i %in% as.vector(count_df$Prj))){
+      count_df <- rbind(count_df, data.frame(
+                            Prj = i, 
+                            Count = 0, 
+                            date = metaData$prjDate[match(i, metaData$prjCode)],
+                            dateSAP = metaData$SAPprjDate[match(i, metaData$prjCode)],
+                            Dev = metaData$Developer[match(i, metaData$prjCode)], 
+                            Doc = metaData$DocType[match(i, metaData$prjCode)],
+                            Consult = metaData$Consultantcy[match(i, metaData$prjCode)]))
+    }
+  }
+  if ("BIW" %in% count_df$Prj){ 
+    count_df$date[count_df$Prj == "BIW"] <- as.character('10/01/2020')
+    count_df$dateSAP[count_df$Prj == "BIW"] <- as.character('10/01/2015')
+  }
+  
+  count_df$date <- as.Date(count_df$date, format = "%m/%d/%Y")
+  count_df$dateSAP <- as.Date(count_df$dateSAP, format = "%m/%d/%Y")
+  count_df <- data.frame(count_df[order(count_df$date),], row.names = NULL)
+  
+  plt<-ggplot(count_df, aes(date, Count, label = Prj, color = Dev, shape = Doc))+
+    geom_point()+ geom_text_repel(show.legend = FALSE)+theme_classic()+
+    labs(title = Title, x ="Document release date", y = "Count", color = "Developer", shape = "Document")
+  pltSAP<-ggplot(count_df, aes(dateSAP, Count, label = Prj, color = Dev, shape = Doc))+
+    geom_point()+ geom_text_repel(show.legend = FALSE)+theme_classic()+
+    labs(title = Title, x ="SAP release date", y = "Count", color = "Developer", shape = "Document")  
+  
+  
+  # if (!is.null(bin)){
+  #   ap <- data.frame(title= Title, Cor = cor(as.numeric(count_df$date), count_df$Count), type = "#")
+  #   bin<<-rbind(bin, ap)
+  # }
+  
+  if ("BIW" %in% count_df$Prj){ 
+     plt<-plt + geom_segment(aes(
+       x=date[Prj == "BIW"], 
+       y=Count[Prj == "BIW"], 
+       xend=as.Date(-Inf), 
+       yend=Count[Prj == "BIW"]),
+       color = 'black',
+       arrow = arrow(length=unit(0.5, 'cm')))
+     pltSAP<-pltSAP + geom_segment(aes(
+       x=dateSAP[Prj == "BIW"], 
+       y=Count[Prj == "BIW"], 
+       xend=as.Date(-Inf), 
+       yend=Count[Prj == "BIW"]),
+       color = 'black',
+       arrow = arrow(length=unit(0.5, 'cm')))
+  }
+  if (mode == 'SAP'){
+    return(plt)}else{
+      return(pltSAP)}
+}
+```
+
+Row counting as a proportion of total line items function
+
+```{r}
+RowCountsFreq <- function(OgClassData, ClassData, Title, bin = NULL) {
+  lineCounts <- table(ClassData$prj)
+  lineCounts <- data.frame(Prj = names(lineCounts), Count = as.vector(lineCounts))
+  OglineCounts <- table(OgClassData$prj)
+  OglineCounts <- data.frame(Prj = names(OglineCounts), Count = as.vector(OglineCounts))
+  
+  OglineCounts <- OglineCounts[OglineCounts$Prj %in% lineCounts$Prj, ]
+  count_df <- data.frame(Prj = lineCounts$Prj, Count = lineCounts$Count, OgCount = OglineCounts$Count)
+  count_df$freq <- (count_df$Count / count_df$OgCount) * 100
+  count_df$date <- metaData$prjDate[match(count_df$Prj, metaData$prjCode)]
+  count_df$Dev <- metaData$Developer[match(count_df$Prj, metaData$prjCode)]
+  count_df$Doc <- metaData$DocType[match(count_df$Prj, metaData$prjCode)]
+  count_df$Consult <- metaData$Consultantcy[match(count_df$Prj, metaData$prjCode)]
+  prjNames <- unique(classData$prj)
+ 
+  for (i in prjNames){
+    if (!(i %in% as.vector(count_df$Prj))){
+      count_df <- rbind(count_df, data.frame(Prj = i, 
+                          Count = 0, 
+                          OgCount =0,
+                          freq = 0, 
+                          date = metaData$prjDate[match(i, metaData$prjCode)], 
+                          Dev = metaData$Developer[match(i, metaData$prjCode)], 
+                          Doc = metaData$DocType[match(i, metaData$prjCode)],
+                          Consult = metaData$Consultantcy[match(i, metaData$prjCode)]))
+    }
+  }
+  
+  if ("BIW" %in% count_df$Prj){ 
+    count_df$date[count_df$Prj == "BIW"] <- as.character('10/01/2020')
+  }
+  
+  count_df$date <- as.Date(count_df$date, format = "%m/%d/%Y")
+  count_df <- data.frame(count_df[order(count_df$date),], row.names = NULL)
+  
+  plt<-ggplot(count_df, aes(date, freq, label = Prj, color = Dev, shape = Doc))+
+    geom_point()+ geom_text_repel(show.legend = FALSE)+theme_classic()+
+    labs(title = Title, x ="Document release date", y = "frequency %", color = "Developer", shape = "Document")
+  
+  if (!is.null(bin)){
+    ap <- data.frame(title= Title, Cor = cor(as.numeric(count_df$date), count_df$freq), type = "%")
+    bin<<-rbind(bin, ap)
+  }
+  if ("BIW" %in% count_df$Prj){ 
+     plt<-plt + geom_segment(aes(
+       x=date[Prj == "BIW"], 
+       y=freq[Prj == "BIW"], 
+       xend=as.Date(-Inf), 
+       yend=freq[Prj == "BIW"]),
+       color = 'black',
+       arrow = arrow(length=unit(0.5, 'cm')))
+  }
+  return(plt)
+}
+```
+
+Histogram Function:
+
+```{r}
+library(ggplot2)
+RowHist <- function(ClassData, Title) {
+lineCounts <- sort(table(ClassData$prj))
+  
+  
+  
+  count_df <- data.frame(Prj = names(lineCounts), Count = as.vector(lineCounts))
+  count_df$date <- metaData$prjDate[match(count_df$Prj, metaData$prjCode)]
+  count_df$date <- as.Date(count_df$date, format = "%m/%d/%Y")
+
+# Create intervals using cut()
+cuts <- cut(count_df$date, breaks = '3 months')
+interval_labels <- as.Date(levels(cuts))
+
+# Calculate the mean of Count within each interval
+mean_values <- aggregate(Count ~ cuts, data = count_df, FUN = mean)
+
+# Create a complete set of intervals
+all_intervals <- data.frame(cuts = levels(cuts))
+
+# Merge mean_values with all_intervals, filling missing values with 0
+mean_values_complete <- merge(all_intervals, mean_values, by = "cuts", all.x = TRUE)
+mean_values_complete[is.na(mean_values_complete)] <- 0
+
+# Plot the histogram with mean values
+plt<- ggplot(mean_values_complete, aes(cuts, Count)) +
+  geom_histogram(stat = 'identity') +
+  labs(x = "Time", y = "Count", title = Title) +
+  theme_classic()+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+return(plt)
+}
+
+#RowHist(classData, "Slay")
+
+```
+
+### Base Line Counts of All Line items
+
+```{r}
+RowCounts(classData, "Counts of all line items")
+RowHist(classData, "Binned Counts of all line items")
+```
+
+Example
+
+```{r}
+RowCounts(classData[classData$Mon == TRUE, ], "Line Items for Monitoring")
+RowCountsFreq(classData, classData[classData$Mon == TRUE, ], "Frequency of Line Items for Monitoring")
+RowHist(classData[classData$Mon == TRUE, ], "Line Items for Monitoring")
+
+```
+
+Upward trajectory
+
+# Looking at just committed to measures
+
+We do this by sorting out all classData where the first digit in the code == 1
+
+```{r}
+#Sorting out all non committed to measures
+classData_exp <- classData[classData$comit == 1, ] #use exp to not mess with original set
+
+#run the same baseline counts
+RowCounts(classData_exp, "Line Item counts of committed to measures")
+
+RowCountsFreq(classData, classData_exp, 'Proportion of Committed to All')
+
+RowHist(classData_exp, "Line Item counts of committed to measures")
+
+```
+
+# Looking at Mit/Mon on Committed Measures
+
+```{r}
+classData_exp <- classData[classData$comit == 1, ] # Only committed
+classData_exp <- classData
+classData_Mon <- classData_exp[classData_exp$Mon == TRUE, ]
+classData_Mit <- classData_exp[classData_exp$Mit == TRUE, ]
+
+#Comparing MON MIT over committed Measures
+#Raw Couts
+RowCounts(classData_Mon, "Monitoring")
+RowCounts(classData_Mit, "Mitigation")
+
+#Count frequency compared to total measures
+RowCountsFreq(classData_exp, classData_Mon, "Monitoring measures as a precentage of total project line items")
+RowCountsFreq(classData_exp, classData_Mit, "Mitigation measures as a precentage of total project line items")
+
+RowHist(classData_Mon, "Monitoring")
+RowHist(classData_Mit, "Mitigation")
+```
+
+# Looking At project phase on committed measures
+
+```{r}
+classData_exp <- classData[classData$comit == 1, ] # Only committed
+classData_exp <- classData
+
+classData_Pre <- classData_exp[classData_exp$PreC == TRUE, ]
+classData_C <- classData_exp[classData_exp$Con == TRUE, ]
+classData_OM <- classData_exp[classData_exp$OM == TRUE, ]
+classData_D <- classData_exp[classData_exp$Dcom == TRUE, ]
+
+RowCounts(classData_Pre, "Pre-Construction")
+RowCounts(classData_C, "Construction")
+RowCounts(classData_OM, "OM")
+RowCounts(classData_D, "Decom")
+
+# RowCountsFreq(classData_exp, classData_Pre, "PreCon measures as a precentage of total project line items")
+# RowCountsFreq(classData_exp, classData_C, "Construction measures as a precentage of total project line items")
+# RowCountsFreq(classData_exp, classData_OM, "OM measures as a precentage of total project line items")
+# RowCountsFreq(classData_exp, classData_D, "Decom measures as a precentage of total project line items")
+
+RowHist(classData_Pre, "Pre-Construction")
+RowHist(classData_C, "Construction")
+RowHist(classData_OM, "OM")
+RowHist(classData_D, "Decom")
+```
+
+# Looking at Location
+
+```{r}
+loc <- c('Site', "Cable", 'OnShore')
+classData_exp <- classData[classData$comit == 1, ] # Only committed
+classData_exp <- classData
+bin = data.frame()
+gListCol <- list()
+gListRow <- list()
+co <- 1
+for (l in loc){
+  
+  classData_l <- classData_exp[sapply(classData_exp$Loc, function(x) any(grepl(l, unlist(strsplit(x, ","))))), ]
+
+  
+  gListRow[[1]] <- RowCounts(classData_l, paste("Location:", l))
+  gListRow[[2]] <- RowCounts(classData_l, paste("Location:", l), mode = "SAP")
+  gListRow[[3]] <- RowCountsFreq(classData_exp, classData_l,paste("Frequency of Location:", l),bin )
+  gListRow[[4]] <- RowHist(classData_l, paste("Location:", l))
+  gListCol[[co]] <- gListRow[]
+  co <- co+1
+}
+
+grid_arrangements <- list()
+
+# Iterate through the nested lists
+for (sub_list in gListCol) {
+  # Use do.call to unpack the graphs in the sub-list and arrange them
+  grid_arrangements[[length(grid_arrangements) + 1]] <- do.call(grid.arrange, c(sub_list, nrow = length(sub_list)))
+}
+
+# Create a final grid arrangement using the grid arrangements list
+final_plot <- do.call(grid.arrange, c(grid_arrangements, ncol = length(grid_arrangements)))
+
+# Display the final grid arrangement
+ggsave("C:/Users/24chi/Desktop/OffshoreWind/images/Location_Eplore.jpeg", final_plot, height = 15, width = length(grid_arrangements)*7, limitsize = FALSE)
+```
+
+# Looking at protected resources
+
+```{r}
+knitr::opts_chunk$set(echo = T,
+                      results = "hide")
+recource <- c("MarineMams", "Turts", "Birds", "Bats", "Benthic", "AirQ", "WaterQ", "AcouAbove", "AcouBelow","Fish", "EssFishHabs", "CultArcheo", "CoastalHabs", "WetLands", "RecTourism", "RecComFisheries","VesselNav", "SocioEcon", "EnviroJustice", "PubHealth", "Visual", "FAA-DOD","Other")
+
+classData_exp <- classData[classData$comit == 1, ] # Only committed
+classData_exp <- classData
+bin = data.frame()
+gListCol <- list()
+gListCol <- list()
+
+for (r in recource) {
+  classData_r <- classData_exp[sapply(classData_exp$Prot, function(x) any(grepl(r, unlist(strsplit(x, ","))))), ]
+  
+  gListRow <- list(
+    RowCounts(classData_l, paste("Protected Resource:", r)),
+    RowCounts(classData_l, paste("Protected Resource:", r), mode = "SAP"),
+    RowCountsFreq(classData_exp, classData_l, paste("Frequency of Protected Resource:", r), bin),
+    RowHist(classData_l, paste("Protected Resource:", r))
+  )
+  
+  gListCol[[length(gListCol) + 1]] <- grid.arrange(grobs = gListRow, nrow = length(gListRow))
+}
+
+# Create a final grid arrangement using the grid arrangements list
+final_plot <- grid.arrange(grobs = gListCol, ncol = length(gListCol))
+
+# Save the final plot as an image
+ggsave("C:/Users/24chi/Desktop/OffshoreWind/images/ProtRec_Explore.jpeg", final_plot, height = 15, width = length(gListCol) * 7, limitsize = FALSE)
+
+# Display the final grid arrangement
+```
+
+# Ab/Bl
+
+```{r}
+AbBl <- c('AboveWater', "BelowWater")
+classData_exp <- classData[classData$comit == 1, ] # Only committed
+classData_exp <- classData
+bin = data.frame()
+for (r in AbBl){
+  classData_r <- classData_exp[sapply(classData_exp$AB, function(x) any(grepl(r, unlist(strsplit(x, ","))))), ]
+
+ RowCounts(classData_r, paste("Above/Below:", r), bin)
+  
+#  print(RowCountsFreq(classData_exp, classData_r,paste("Above/Below:", r, "from Committed Measures"), bin))
+  
+ # print(RowHist(classData_r, paste("Above/Below:", r)))
+
+}
+```
+
+# Can you pull correlations off these things?
+
+yes yes you can - kinda feels like psudo stats
+
+```{r}
+classData_exp <- classData
+lineCounts <- sort(table(classData_exp$prj))
+count_df <- data.frame(Prj = names(lineCounts), Count = as.vector(lineCounts))
+count_df$date <- metaData$prjDate[match(count_df$Prj, metaData$prjCode)]
+count_df$date <- as.Date(count_df$date, format = "%m/%d/%Y")
+count_df <- data.frame(count_df[order(count_df$date),], row.names = NULL)
+
+correlation <- cor(as.numeric(count_df$date), count_df$Count)
+```
+
+```{r}
+#Better way to count rows
+
+```
+
+# Protected Resource Larger Cats
+
+```{r}
+classData_exp <- classData
+bin = data.frame()
+
+for (r in widerCatsName){
+  classData_r <- classData_exp[sapply(classData_exp$widerCatsall, function(x) any(grepl(r, unlist(strsplit(x, ","))))), ]
+
+  
+  print(RowCounts(classData_r, paste("Resource Catigory:", r, "from Committed Measures"), bin))
+  
+  # print(RowCountsFreq(classData_exp, classData_r,paste("Frequency of Protected Resource:", r, "from Committed Measures"), bin))
+  # print(RowHist(classData_r, paste("Resource Catigory:", r)))
+
+}
+```
+
+# One to One Graphs - Above Vs Below
+
+```{r}
+AbBl <- c('AboveWater', "BelowWater")
+classData_exp <- classData#[classData$comit == 1, ] # Only committed
+
+for (r in AbBl){
+  classData_r <- classData_exp[sapply(classData_exp$AB, function(x) any(grepl(r, unlist(strsplit(x, ","))))), ]
+  ifelse(r == 'AboveWater', classData_Ab <- classData_r, classData_Bl <- classData_r )
+}
+
+
+lineCountX <- table(classData_Ab$prj)
+lineCountY <- table(classData_Bl$prj)
+  count_df <- data.frame(Prj = names(lineCountX), CountX = as.vector(lineCountX), CountY = as.vector(lineCountY))
+  count_df$date <- metaData$prjDate[match(count_df$Prj, metaData$prjCode)]
+  count_df$Dev <- metaData$Developer[match(count_df$Prj, metaData$prjCode)]
+  count_df$Doc <- metaData$DocType[match(count_df$Prj, metaData$prjCode)]
+  count_df$Consult <- metaData$Consultantcy[match(count_df$Prj, metaData$prjCode)]
+
+  
+
+  plt<-ggplot(count_df, aes(CountX, CountY, label = Prj, color = Dev, shape = Doc))+
+    geom_point()+ geom_text_repel(show.legend = FALSE)+theme_classic()+
+    labs(title = NULL, x ="Above Water measures", y = "Below Water measures", color = "Developer", shape = "Document")+ 
+    geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed")
+
+  hit <- 3
+  ggsave("ABBL.png", plt, height = hit, width = hit*1.95)
+  plt
+  
+  width <- 6
+height <- width*10/16
+
+
+
+ggsave("fig5.png", plt, height = height, width =width, dpi = 300)
+
+```
+
+### Mon vs Mit
+
+```{r}
+classData_exp <- classData #[classData$comit == 1, ] # Only committed
+
+classData_Mon <- classData_exp[classData_exp$Mon == TRUE, ]
+classData_Mit <- classData_exp[classData_exp$Mit == TRUE, ]
+
+
+lineCountX <- table(classData_Mon$prj)
+lineCountY <- table(classData_Mit$prj)
+  count_df <- data.frame(Prj = names(lineCountX), CountX = as.vector(lineCountX), CountY = as.vector(lineCountY))
+  count_df$date <- metaData$prjDate[match(count_df$Prj, metaData$prjCode)]
+  count_df$Dev <- metaData$Developer[match(count_df$Prj, metaData$prjCode)]
+  count_df$Doc <- metaData$DocType[match(count_df$Prj, metaData$prjCode)]
+  count_df$Consult <- metaData$Consultantcy[match(count_df$Prj, metaData$prjCode)]
+
+  
+
+  plt<-ggplot(count_df, aes(CountX, CountY, label = Prj, color = Dev, shape = Doc))+
+    geom_abline(slope = 5, intercept = 0, color = "red", linetype = "dashed")+
+    geom_point()+ geom_text_repel(show.legend = FALSE, force = 3)+theme_classic()+
+    labs(title = NULL, x ="Monitoring Measures", y = "Mitigation Measures")
+
+  plt
+  
+width <- 6
+height <- width*10/16
+
+
+
+ggsave("fig4.png", plt, height = height, width =width, dpi = 300)
+
+```
+
+# Time Line of Vineyard Wind
+
+```{r}
+library(timevis)
+library(ggplot2)
+
+file_path <- "C:/Users/24chi/Desktop/OffshoreWind/TimeLine.xlsx"
+
+data <- read_excel(file_path, sheet = 1) #Grabbing the data from excel
+dataRef <- read_excel(file_path, sheet = 2) #Grabbing the data from excel
+data$id<-c(1:nrow(data))
+data$start <- as.Date(data$start)
+
+data$group <- factor(data$group, levels = c("Coastal Virginia", "Revolution Wind",'South Fork',  "Vineyard Wind", "Ocean Wind 1", "New England Wind", "Empire Wind", "Kittyhawk", "Sunrise Wind", "Atlantic Shores South", "Mayflower / South Coast"))
+
+
+
+data$color<-factor(data$color, levels = c("SAP","COP Submit", "NOI EIS", "DEIS Release", "FEIS Release", "ROD Release", "COP Approval", "COP Update", "COP Other", "Comment End", "Other" ))
+data$size <- dataRef$Size[match(data$color, dataRef$Tags)]
+
+matchdf <- data.frame(
+  nameLong = c("Vineyard Wind", "South Fork", "Ocean Wind 1", "Revolution Wind", "Kittyhawk", "Coastal Virginia", "Sunrise Wind", "New England Wind", "Mayflower / South Coast", "Atlantic Shores South", "Empire Wind"),
+  nameShort = c("YVW", "SFR", "OWO", "REV", "KHW", 'CVW', "SUN", "NEW", "MFW", "ASS", "EPW"))
+
+data$prj <- matchdf$nameShort[match(data$group, matchdf$nameLong)]
+data$dev <- metaData$Developer[match(data$prj, metaData$prjCode)]
+
+library(randomcoloR)
+
+
+category_colors <- c(
+'SAP' = "#42d4f4",#
+'COP Submit' = "#3cb44b",#
+'COP Other' = "#aaffc3",
+'DEIS Release' = "#800000",#
+'Comment End' = "#a9a9a9",
+'NOI EIS' = "#dcbeff",#
+'COP Approval' = "#ffe119",#
+'ROD Release' = "#f58231",#
+'FEIS Release' = "#e6194B",#
+'COP Update' = "#bfef45",
+'Other' = "#000000"
+)
+
+devList <- unique(data$dev)
+colors<- generate_colors <- function(n) {
+  colors <- randomColor(n, luminosity = "bright")
+  return(colors)
+}
+colors <- generate_colors(length(devList))
+
+
+
+plt<-ggplot(data, aes(start, group, color = color, size = size))+
+  geom_point()+
+  scale_size(guide = "none") +
+  scale_color_manual(values = category_colors) +
+  theme_linedraw()+
+  geom_vline(xintercept = as.Date("2023-07-18"), linetype = "dashed", color = "black")+
+  labs(title = "", x = '', y='', color = "")
+
+ggsave("TimeLine.png", plt, height = 4.5, width = 10, bg = "transparent")
+plt
+#vistime(data, linewidth = 10)
+```
+
+```{r}
+install.packages("vistime")
+library(vistime)
+
+
+```
+
+# Playing around with the Data
+
+```{r}
+library(tidyr)
+classData_exp <- classData
+
+recource <- c("MarineMams", "Turts", "Birds", "Bats", "Benthic", "AirQ", "WaterQ", "AcouAbove", "AcouBelow","Fish", "EssFishHabs", "CultArcheo", "CoastalHabs", "WetLands", "RecTourism", "RecComFisheries","VesselNav", "SocioEcon", "EnviroJustice", "PubHealth", "Visual", "FAA-DOD","Other")
+
+data_sep_tags <- classData_exp %>%
+  separate_rows(Prot, sep = ", ")
+
+# Step 2: Group the data by project and tag, and then count the occurrences
+tag_counts <- data_sep_tags %>%
+  group_by(prj, Prot) %>%
+  summarize(count = n())
+
+fullCount <- data_sep_tags %>%
+  group_by(prj) %>%
+  summarize(count = n())
+
+all_combinations <- expand.grid(
+  prj = unique(tag_counts$prj),
+  Prot = recource
+)
+
+tagCounts <- all_combinations %>%
+  left_join(tag_counts, by = c("prj", "Prot")) %>%
+  replace_na(list(count = 0))
+
+tagCounts$prec <- tagCounts$count / fullCount$count[match(tagCounts$prj, fullCount$prj)]
+
+Rank <- tagCounts %>%
+  group_by(Prot) %>%
+  summarize(count = mean(prec))
+
+tagCounts$Prot <- factor(tagCounts$Prot, levels = first( list(Rank$Prot[order(Rank$count)])   ))
+# tagCounts$prj <- factor(tagCounts$prj, levels = c("BIW", "YVW", "SFR", "OWO", "REV", "KHW", 'CVW', "SUN", "NEW", "MFW", "ASS", "EPW"))
+tagCounts$prj <- factor(tagCounts$prj, levels = c('BIW','CVW', "REV", "SFR", "YVW", "OWO", "NEW", "EPW", "KHW", "SUN", "ASS", "MFW")
+)
+
+plt <- ggplot(tagCounts, aes(prj, Prot, size = prec, color = prec))+
+  scale_color_gradient(low = "blue", high = "red") +
+  labs(title = NULL,x=NULL, y=NULL, color = 'Freq\nof Tag')+
+  geom_point()+  guides(size = 'none')+
+  theme_minimal()+
+  theme(legend.position ='bottom', axis.text.x = element_text(angle = 90, hjust = 1))
+
+wid <- 3.5
+ggsave("CountbyProt.png", plt, width = wid, height = wid*1.4)
+plt
+
+library(cowplot)
+leg <- get_legend(plt)
+print(leg)
+# Extract the legend from the grob
+
+# Print the extracted legend
+
+ggplot(tagCounts, aes(prj, prec))+geom_bar(stat = 'identity')+facet_wrap(tagCounts$Prot, ncol=1)
+
+width <- 6
+height <- width*10/12
+
+
+
+ggsave("fig3.png", plt, height = width, width =height, dpi = 300)
+
+```
+
+## hh
+
+/
+
+```{r}
+1+1
+```

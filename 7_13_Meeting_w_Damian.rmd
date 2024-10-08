@@ -1,0 +1,151 @@
+# Meeting 07-13-2023
+
+------------------------------------------------------------------------
+
+# ReCap: What have we done so far
+
+-   Started with lots of reading on offshore wind generally, looking at papers that investigate the potential environmental impacts that offshore wind could pose the its direct environment and the ocean as a whole
+
+-   Went into the legal framework and the bureaucratic processes that lead into the development of EA, COP, DEIS, and FEIS documents
+
+-   Compiled a list of all the projects on the East Coast with available COP's (1), DEIS's (8), FONSI (1) or FEIS's (2+1)
+
+-   Grabbed all these projects associated 'meta' data
+
+    ```{r}
+    library(readxl)
+    library(tidyverse)
+    file_path <- "C:/Users/24chi/Desktop/OffshoreWind/DA_Classifications_Final.xlsx"
+    classData <- read_excel(file_path, sheet = 1) #Grabbing the data from excel
+    metaData <- read_excel(file_path, sheet = 2) 
+
+    classData$prj <- substr(classData$Code,1,3)
+    classData$comit <- as.numeric(substr(classData$Code,4,4))
+
+    classData$date <- metaData$prjDate[match(classData$prj, metaData$prjCode)]
+    classData$date <- as.Date(classData$date, format = "%m/%d/%Y")
+
+    lineCounts <- sort(table(classData$prj))
+    count_df <- data.frame(Prj = names(lineCounts), Count = as.vector(lineCounts))
+    count_df$date <- metaData$prjDate[match(count_df$Prj, metaData$prjCode)]
+    count_df$Dev <- metaData$Developer[match(count_df$Prj, metaData$prjCode)]
+    count_df$Doc <- metaData$DocType[match(count_df$Prj, metaData$prjCode)]
+    count_df$Consult <- metaData$Consultantcy[match(count_df$Prj, metaData$prjCode)]
+
+    print(tibble(count_df))
+    ```
+
+-   Copy and pasted all the line items into an excel file
+
+    [![](images/Screenshot%202023-07-12%20060126.png)](%22C:\Users\24chi\Desktop\OffshoreWind\OffshoreLineItems.xlsx%22)
+
+-   Made a script to assign these line items codes based on project, section number and line item number. For example EPW2056 -\> Empire wind section 2 line item 056. These "coded" line items were then saved in a different excel sheet
+
+-   Made a RShiny Application to sift through all these line items and classify them based on a few variables (See Below)
+
+    ::: {#Classification Scheme} \### Classification Scheme
+
+    **Title Brief**: either copy and pasted from line item or written by me
+
+    **Phase**: PreC, Con, OM, Decom
+
+    **Location**: Site, Cable, OnShore
+
+    **Above-Below Water**: Above or Below
+
+    **Monitoring-Mitigation**: Mon, Mit
+
+    **Protected Resource**: MarineMams, Turts, Birds, Bats, Benthic, AirQ, WaterQ, AcouAbove, AcouBelow, Fish, EFH, CultArcheological, CoastalHabs, WetLands, RecTourism, RecComFisheries, VesselNav, SocioEcon, EnviroJustice, PubHealth, FAA-DOD, Other
+
+    **Flags**: DevOp Procedure, additional flag 1, additional flag 2 (these don't really mean anything) :::
+
+-   The output of this classification process is a 2,411 line long data set affectionately refereed to as classData from here on out
+
+    ```{r}
+    View(classData)
+    ```
+
+------------------------------------------------------------------------
+
+# Exploratory Analysis
+
+**Initial Idea and Questions:**
+
+-   Do the number of line items in these documents significantly change over time
+
+-   Do focus points in these documents differ over time
+
+-   If line items do increase over time are these companies actually doing more or is it just taking more credit than credit is due
+
+**Approach: We've looked into three methods of comparison**
+
+-   Comparing Counts:
+
+-   Comparing frequency of catigory within project to other project frequencies:
+
+-   3 Month Binned histograms taking the average of projects falling with in that month
+
+### Counts of all line items compared to 'committed' line items
+
+```{r}
+library(cowplot)
+plt1 <- RowCounts(classData, "Counts of All Line items")
+plt2 <- RowHist(classData, "Binned Counts of all line items")
+
+classData_exp <- classData[classData$comit == 1, ]
+
+plt3 <- RowCounts(classData_exp, "Counts of Committed Line items")
+plt4 <- RowHist(classData_exp, "Binned Counts of Committed line items")
+
+plot_grid(plt1, plt2, nrow = 2)
+plot_grid(plt3, plt4, nrow = 2)
+```
+
+------------------------------------------------------------------------
+
+# One Big Issue
+
+Does the number of line items actually mean that they are doing any more to mitigate and monitor environmental conditions?
+
+To illustrate this I've put together my favorite example from Revolution Wind Farm Section 1:
+
+![](images/Screenshot%202023-07-12%20062954.png)
+
+-   They have 10!!! different line items just specifying that they have an OSRP - does this mean that they are doing 10x more?
+
+-   Not to mention that all of these things end up getting catigorized slightly differently -
+
+    ```{r}
+    classData_exp <- classData[(classData$prj == "REV")&(classData$comit == 1)&(sapply(classData$Prot, function(x) any(grepl('WaterQ', unlist(strsplit(x, ","))))))&(classData$tit == 'OSRP'),]
+    view(classData_exp)
+    ```
+
+**So is this a meaningful way of measuring the extent of the mitigation and monitoring?**
+
+### Potential Solutions for this problem
+
+-   The classification data, although probably not perfect, does give us a good way of sorting and searching through all 2411 line items. We could use this to go back through all the line items and sort them into 'real' catigories (sort of like GDP)
+
+-   These real categories are bins such as HDD, Pile driving mitigation measures, TOY tree clearance restrictions, SWPPP, and many others - and once you put a line item in a bin it cant be put into another bin - this would allow us to compare the number of 'real' mitigation and monitoring measures across projects as well as the number of line items they dedicated to describing it within their document
+
+-   To visualize this next potential layer of analysis we could make a graph that sort of looked like this where you can see who is doing what but also how many line items it takes for them to get that point across
+
+![](images/Screenshot%202023-07-12%20072109.png){width="320"}
+
+------------------------------------------------------------------------
+
+# Questions for Damien
+
+-   What should we do with the Proposed/committed to measures - they are generally different sections and some projects are fairly vauge about what they are actually going to do and what they might do
+
+**Next Steps**
+
+-   One way we could start doing this is to go through the new OWO FEIS and compare the line items that made it to that to the OWO DEIS - this might give us a better sense at what passes through the drafting process and what gets left behind
+
+-   Get the search application working to a point where we could be more specific and experimental with our comparisons - for example searching the line items more like an sql database
+
+-   Ideally you could use the search application as a tool to do the 'real' catigorizations
+
+Ideas:
+
+-   boxplots
